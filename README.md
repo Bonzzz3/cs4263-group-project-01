@@ -1,7 +1,7 @@
 # Cops-and-robbers dataset package (CS4263 group project)
 
 Exact ground truth for a pursuit game on graphs, plus the tools to regenerate,
-verify, prompt and score. Needs Python 3 only; no dependencies.
+verify, prompt and score. Python 3.12, managed with uv: run `uv sync` first.
 
 ## Files
 
