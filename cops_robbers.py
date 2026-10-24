@@ -44,10 +44,13 @@ def neighbours(edges, n):
 
 def solve(n, edges, k):
     """
-    Return (win, depth) where win[(G, i, t)] is True if the guards can force
-    capture from guard multiset G (sorted tuple), intruder room i, and turn t
-    (0 = guards to move, 1 = intruder to move). depth is the number of
-    half-moves needed under optimal play (capture states have depth 0).
+    Backward induction over every state (G, i, t): guard rooms G (a sorted
+    tuple, since guards are interchangeable), intruder room i, and turn t
+    (0 = guards to move, 1 = intruder to move).
+
+    Returns depth: a dict mapping each state the guards win to the number of
+    half-moves to capture under optimal play (capture states have depth 0).
+    A state missing from depth is a proven escape for the intruder.
     """
     adj = neighbours(edges, n)
     guard_sets = list(itertools.combinations_with_replacement(range(n), k))
@@ -103,8 +106,9 @@ def solve(n, edges, k):
     return depth
 
 
-def ground_truth(n, edges, guard_start, k=None):
-    """Per intruder start room: (capture_guaranteed, rounds_if_guaranteed)."""
+def ground_truth(n, edges, guard_start):
+    """Per intruder start room: (capture_guaranteed, rounds_if_guaranteed).
+    The number of guards k is len(guard_start)."""
     k = len(guard_start)
     G = tuple(sorted(guard_start))
     depth = solve(n, edges, k)
