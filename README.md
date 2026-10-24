@@ -87,7 +87,6 @@ Each line of `dataset/instances_*.jsonl` is one instance:
 | `rounds` | Room name → half-moves to capture under optimal play, or `null` if the intruder escapes |
 | `escape_rooms`, `max_half_moves` | Number of escape rooms, and the longest capture |
 | `solve_ms` | Solver time when the dataset was built (machine-dependent) |
-| `extra_edges` | Not used by this family (always 0) |
 
 Room names are letters A, B, C, ... in index order.
 

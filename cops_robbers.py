@@ -11,7 +11,6 @@ They must never be called inside Solution B or inside any safeguard.
 
 Subcommands
   solve     solve one instance given on the command line
-  generate  write a set of instances (with ground truth) to JSONL
   prompt    print the B0 prompt for one instance from a JSONL file
   score     score LLM responses against ground truth
 
@@ -26,9 +25,7 @@ Rules of the game (exactly as stated in the prompt):
 import argparse
 import itertools
 import json
-import random
 import string
-import sys
 from collections import defaultdict
 
 
@@ -124,41 +121,6 @@ def room_names(n):
     return list(string.ascii_uppercase[:n]) if n <= 26 else [f"R{i}" for i in range(n)]
 
 
-def is_connected(n, edges):
-    adj = defaultdict(set)
-    for a, b in edges:
-        adj[a].add(b)
-        adj[b].add(a)
-    seen, stack = {0}, [0]
-    while stack:
-        v = stack.pop()
-        for w in adj[v]:
-            if w not in seen:
-                seen.add(w)
-                stack.append(w)
-    return len(seen) == n
-
-
-def random_graph(n, extra, rng):
-    """Random spanning tree plus `extra` extra edges (creates loops)."""
-    edges = set()
-    nodes = list(range(n))
-    rng.shuffle(nodes)
-    for idx in range(1, n):
-        a = nodes[idx]
-        b = nodes[rng.randrange(idx)]
-        edges.add((min(a, b), max(a, b)))
-    attempts = 0
-    while extra > 0 and attempts < 1000:
-        attempts += 1
-        a, b = rng.sample(range(n), 2)
-        e = (min(a, b), max(a, b))
-        if e not in edges:
-            edges.add(e)
-            extra -= 1
-    return sorted(edges)
-
-
 def gen_petersen(m, step=2):
     """Generalised Petersen graph GP(m, step): 2m rooms, 3 corridors each."""
     e = set()
@@ -192,20 +154,11 @@ def core_tree(total, rng, core_m=5):
     return total, sorted(edges)
 
 
-def make_instance(idx, n, extra, k, rng, family="random"):
-    if family == "structured":
-        # Plain generalised Petersen graph; `n` is the GP parameter m and
-        # rooms = 2m. NOTE: with 2 guards every won room is won within one
-        # half-move (guard room or adjacent), so this family is too easy to
-        # separate real reasoning from an adjacency check. Kept for reference;
-        # the dataset uses "coretree" instead.
-        n, base = gen_petersen(n, 2)
-        edges = relabel(n, base, rng)
-    elif family == "coretree":
-        n, base = core_tree(n, rng)
-        edges = relabel(n, base, rng)
-    else:
-        edges = random_graph(n, extra, rng)
+def make_instance(idx, n, k, rng):
+    """One instance: a core_tree graph with n rooms (names shuffled) and k
+    guards in random start rooms, labelled by the solver."""
+    n, base = core_tree(n, rng)
+    edges = relabel(n, base, rng)
     guard_start = [rng.randrange(n) for _ in range(k)]
     truth = ground_truth(n, edges, guard_start)
     names = room_names(n)
@@ -213,7 +166,6 @@ def make_instance(idx, n, extra, k, rng, family="random"):
         "id": f"inst{idx:04d}",
         "n": n,
         "k": k,
-        "extra_edges": extra,
         "edges": edges,
         "guard_start": guard_start,
         "truth": {names[i]: truth[i][0] for i in range(n)},
@@ -340,28 +292,6 @@ def cmd_solve(a):
               + (f" (within {d} half-moves)" if ok else ""))
 
 
-def cmd_generate(a):
-    rng = random.Random(a.seed)
-    sizes = [int(x) for x in a.sizes.split(",")]
-    if a.family == "structured":
-        sizes = [m for m in sizes if m != 6]
-    count = 0
-    with open(a.out, "w") as f:
-        for n in sizes:
-            made, tries = 0, 0
-            while made < a.per_size and tries < a.per_size * 200:
-                tries += 1
-                extra = rng.randint(0, max(1, n // 2))
-                inst = make_instance(count, n, extra, a.guards, rng, a.family)
-                vals = list(inst["truth"].values())
-                if a.mixed and (all(vals) or not any(vals)):
-                    continue  # keep only instances with both outcomes present
-                f.write(json.dumps(inst) + "\n")
-                made += 1
-                count += 1
-            print(f"n={n}: wrote {made} instances", file=sys.stderr)
-
-
 def load(path):
     with open(path) as f:
         return [json.loads(line) for line in f if line.strip()]
@@ -399,23 +329,6 @@ def main():
     s.add_argument("--edges", required=True, help="e.g. 0-1,1-2,2-3,3-0")
     s.add_argument("--guards", required=True, help="e.g. 0,0")
     s.set_defaults(fn=cmd_solve)
-
-    g = sub.add_parser("generate")
-    g.add_argument("--sizes", default="6,8,10,12")
-    g.add_argument("--per-size", type=int, default=20)
-    g.add_argument("--guards", type=int, default=2)
-    g.add_argument("--seed", type=int, default=0)
-    g.add_argument("--family", choices=["random", "coretree", "structured"],
-                   default="random",
-                   help="random: tree plus extra loops (use with 1 guard). "
-                        "coretree: Petersen core plus pendant trees, size = total "
-                        "rooms >= 12 (use with 2 guards; this is the dataset family). "
-                        "structured: plain generalised Petersen graphs, rooms = 2*size "
-                        "(too easy: every win is within one half-move)")
-    g.add_argument("--mixed", action="store_true",
-                   help="keep only instances where some starts win and some lose")
-    g.add_argument("--out", default="instances.jsonl")
-    g.set_defaults(fn=cmd_generate)
 
     pr = sub.add_parser("prompt")
     pr.add_argument("--instances", default="instances.jsonl")

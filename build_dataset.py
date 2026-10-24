@@ -35,17 +35,16 @@ OUT = "dataset"
 def build_split(split, seen):
     rng = random.Random(SEEDS[split])
     rows = []
-    plan = [("coretree-2g", "coretree", 2, CORETREE_SIZES)]
-    for fam_name, family, k, sizes in plan:
+    plan = [("coretree-2g", 2, CORETREE_SIZES)]
+    for fam_name, k, sizes in plan:
         for size in sizes:
             made = tries = 0
             while made < PER_SIZE[split]:
                 tries += 1
                 if tries > 5000:
                     raise RuntimeError(f"could not fill {split} {fam_name} {size}")
-                extra = rng.randint(0, max(1, size // 2)) if family == "random" else 0
                 t0 = time.perf_counter()
-                inst = make_instance(0, size, extra, k, rng, family)
+                inst = make_instance(0, size, k, rng)
                 solve_ms = (time.perf_counter() - t0) * 1000
                 vals = list(inst["truth"].values())
                 if all(vals) or not any(vals):
