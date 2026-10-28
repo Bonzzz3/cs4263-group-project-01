@@ -21,6 +21,31 @@ outputs.  The B4 critic receives the original task and the draft, but no
 ground-truth answer.  B5 threshold selection is performed on development data
 only; the selected threshold must be frozen before held-out evaluation.
 
+These are safeguards because each adds a defined error-control mechanism, not
+because each is expected to improve every metric on every model:
+
+| Safeguard | Mechanism that can improve reliability | Evidence that must be reported |
+| --- | --- | --- |
+| B1 | An explicit state/adjacency/turn checklist targets graph-tracking errors. | Exact match and unsafe-room rate versus B0. |
+| B2 | Active falsification targets missed escape routes and the possible-versus-guaranteed mistake. | Unsafe-room rate, especially on larger/deeper instances. |
+| B3 | Independent samples reduce some one-off errors through aggregation. | Accuracy, consensus strength, three-call cost, and correlated-error failures. |
+| B4 | A separate critique pass can expose illegal moves, invented edges, and contradictions before revision. | Accuracy, unsafe-room rate, and three-call latency/token cost. |
+| B5 | Selective prediction avoids forcing a low-confidence answer. | Coverage, conditional accuracy/risk, and abstention rate. |
+
+B3 agreement must not be described as calibrated confidence: correlated model
+errors can make all three samples agree on the same wrong answer.  If B3 does
+not beat B0, that is a valid result showing the limitation of self-consistency
+for this task, rather than a reason to remove the condition.  Likewise, B5 is
+not allowed to trade away coverage invisibly; all abstentions and answered-only
+metrics must be reported.
+
+The safeguards remain prompt-level controls over the contemporary model's own
+reasoning.  B1 and B2 do not enumerate the complete game state space and do
+not call, generate, or reproduce the classical solver.  The runner also never
+sends classical labels, solver states, or checker feedback to the model.  This
+boundary is important because the project clarification prohibits turning
+Solution B into a classical planning component or hybrid pipeline.
+
 ## Running
 
 The runner constructs B1--B5 prompts at runtime from the existing B0 prompts:

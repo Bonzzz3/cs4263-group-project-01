@@ -29,6 +29,11 @@ Before producing the final JSON, privately maintain an explicit ledger:
    against every intruder response.
 5. Use only corridors explicitly listed in the task.  Do not invent edges or
    rely on a visual layout that was not provided.
+6. Decide every room from its own starting state.  Do not default unexamined
+   rooms to TRUE or FALSE because another room looks similar.
+
+This is an internal checklist for the model's direct reasoning, not a request
+to enumerate the full state space or implement a deterministic planner.
 
 Do not print this ledger or intermediate reasoning.  Return only the required
 JSON object.
@@ -39,7 +44,7 @@ B2_INSTRUCTIONS = """
 SAFEGUARD METHOD: COUNTEREXAMPLE SEARCH
 For each candidate room, first form a provisional capture-guaranteed label.
 Before accepting any TRUE label, actively try to refute it:
-1. Search for a legal intruder response after every relevant guard move,
+1. Try to identify a legal intruder response after every relevant guard move,
    including staying put, that avoids capture.
 2. Continue the search across alternating turns rather than checking only one
    step.  Look specifically for a repeatable escape policy or cycle.
@@ -48,6 +53,12 @@ Before accepting any TRUE label, actively try to refute it:
    hardest to stop.
 4. If a sustained legal escape policy is found, label the room FALSE.  Retain
    TRUE only when the attempted refutation fails under the stated rules.
+5. Do not treat an all-TRUE or all-FALSE answer as a shortcut: each room needs
+   its own adversarial check.
+
+Use a model-generated adversarial review, not an exhaustive classical search.
+Do not write or execute a solver, enumerate the complete state graph, or use
+classical labels, solver states, or checker feedback.
 
 This is an adversarial check, not a request for a classical solver or external
 feedback.  Do not print the search trace; return only the required JSON.
@@ -58,8 +69,11 @@ B3_INSTRUCTIONS = """
 SAFEGUARD METHOD: INDEPENDENT SAMPLE
 Solve this instance independently.  Do not assume that a likely local capture
 proves global guaranteed capture, and do not refer to any other sample or
-answer.  Return only the required JSON object.  This request is one independent
-sample; the experiment will combine separate samples outside the model.
+answer.  Decide each room independently; do not use an all-TRUE or all-FALSE
+default.  This request is one independent sample; the experiment will combine
+separate samples outside the model.  Agreement between samples is evidence of
+stability, not proof of correctness, so follow the graph and turn rules for
+every sample.  Return only the required JSON object.
 """
 
 
@@ -68,7 +82,8 @@ SAFEGUARD METHOD: CONFIDENCE AND ABSTENTION
 Assess whether the complete room-by-room answer is reliable under the exact
 rules.  Confidence must describe your confidence in the whole answer, not just
 in an easy room.  Do not inflate confidence merely because the output format is
-simple.
+simple, because multiple rooms received the same label, or because no syntax
+error was encountered.
 
 If you can support every room label, return:
 {"status":"ANSWERED","capture_guaranteed":{"ROOM":true/false},"confidence":0.0}
