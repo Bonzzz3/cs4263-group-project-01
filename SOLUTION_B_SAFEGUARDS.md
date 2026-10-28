@@ -27,10 +27,10 @@ The runner constructs B1--B5 prompts at runtime from the existing B0 prompts:
 
 ```bash
 .venv-openai/bin/python run_openai_safeguards.py \
-  --variant B1 --prompts dataset/prompts_B0_dev.jsonl \
-  --ids-from dataset/instances_test_100.jsonl \
-  --model gpt-5.4 --reasoning-effort low --timeout 600 \
-  --output work/openai_b1_test100.jsonl
+  --variant B1 --prompts dataset/prompts_B0_test.jsonl \
+  --ids-from dataset/instances_test_80.jsonl \
+  --model gpt-5.6-luna --reasoning-effort medium --timeout 600 \
+  --output work/openai_b1_test80.jsonl
 ```
 
 Use the same command with `B2`, `B3`, or `B4`. B3 and B4 intentionally make
@@ -42,7 +42,8 @@ threshold table, and freeze the selected threshold:
 ```bash
 .venv-openai/bin/python run_openai_safeguards.py \
   --variant B5 --prompts dataset/prompts_B0_dev.jsonl \
-  --model gpt-5.4 --reasoning-effort low --timeout 600 \
+  --abstain-threshold 0.0 \
+  --model gpt-5.6-luna --reasoning-effort medium --timeout 600 \
   --output work/openai_b5_dev.jsonl
 
 .venv-openai/bin/python select_b5_threshold.py \
@@ -59,14 +60,17 @@ Score every condition with the matching instance file:
 
 ```bash
 .venv-openai/bin/python cops_robbers.py score \
-  --instances dataset/instances_test_100.jsonl \
-  --responses work/openai_b1_test100.jsonl
+  --instances dataset/instances_test_80.jsonl \
+  --responses work/openai_b1_test80.jsonl
 ```
 
 Report exact-match rate, unsafe-room rate, wasteful-room rate, unparseable
 rate, confidence/Brier metrics, latency, total tokens, and API calls per
-instance.  For B5 also report coverage and conditional accuracy/risk among
-answered instances; an abstention is not silently counted as a correct label.
+instance.  Break the results down by room count and maximum classical capture
+depth so the report captures the professor's suggested complexity-versus-
+correctness relationship.  For B5 also report coverage and conditional
+accuracy/risk among answered instances; an abstention is not silently counted
+as a correct label.
 
 An improvement claim should be made only when the recorded results support it.
 The intended safeguard success criterion is lower unsafe-room rate than B0,

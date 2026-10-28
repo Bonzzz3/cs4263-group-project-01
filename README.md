@@ -49,6 +49,10 @@ uv run python cops_robbers.py score --instances dataset/instances_test.jsonl --r
 Rebuilding reproduces the dataset exactly; only the timing fields (`solve_ms`,
 `mean_solve_ms`) change between runs.
 
+The OpenAI runners default to `gpt-5.6-luna` with `reasoning_effort=medium`.
+Override these with `OPENAI_MODEL` and `OPENAI_REASONING_EFFORT` for a
+controlled comparison.  Keep `.env` local; it must never be committed.
+
 ## The problem
 
 Rooms and corridors form a connected graph. Two guards and one intruder each
@@ -77,7 +81,7 @@ capture took one move (labels reduced to an adjacency check).
 
 - `dev`: 10 instances per size (80 in total), for prompt development.
 - `test`: 30 instances per size (240 in total), for reported results only.
-- `instances_test_100.jsonl`: a balanced 100-instance held-out subset selected
+- `instances_test_80.jsonl`: a balanced 80-instance held-out subset selected
   from the current test split for the project's reduced evaluation budget.
 
 Each line of `dataset/instances_*.jsonl` is one instance:

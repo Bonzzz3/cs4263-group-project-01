@@ -77,6 +77,8 @@ def main() -> int:
         parser.error("--max-unsafe-room-rate must be between 0 and 1")
 
     instances = {row["id"]: row for row in load_jsonl(args.instances)}
+    if not instances or any(row.get("split") != "dev" for row in instances.values()):
+        parser.error("B5 threshold selection must use a development split file")
     records = load_jsonl(args.responses)
     thresholds = [round(i / 100, 2) for i in range(101)]
     table = []

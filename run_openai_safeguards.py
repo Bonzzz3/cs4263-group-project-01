@@ -13,8 +13,8 @@ Examples:
 
     .venv-openai/bin/python run_openai_safeguards.py \
         --variant B5 --abstain-threshold 0.70 --ids-from \
-        dataset/instances_test_100.jsonl --prompts dataset/prompts_B0_test.jsonl \
-        --timeout 600 --output work/openai_b5_test100.jsonl
+        dataset/instances_test_80.jsonl --prompts dataset/prompts_B0_test.jsonl \
+        --timeout 600 --output work/openai_b5_test80.jsonl
 """
 
 from __future__ import annotations
@@ -235,8 +235,8 @@ def run(args: argparse.Namespace) -> int:
         raise ValueError("--abstain-threshold must be between 0 and 1")
 
     prompts = select_prompts(args)
-    model = args.model or os.environ.get("OPENAI_MODEL", "gpt-5.4")
-    effort = args.reasoning_effort or os.environ.get("OPENAI_REASONING_EFFORT", "low")
+    model = args.model or os.environ.get("OPENAI_MODEL", "gpt-5.6-luna")
+    effort = args.reasoning_effort or os.environ.get("OPENAI_REASONING_EFFORT", "medium")
     output = args.output
     output.parent.mkdir(parents=True, exist_ok=True)
     done = existing_ids(output, model, effort, args.variant)

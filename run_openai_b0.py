@@ -116,9 +116,9 @@ def run(args: argparse.Namespace) -> int:
             )
         prompts = [row for row in prompts if row["id"] in requested_ids]
     selected = prompts[: args.limit] if args.limit is not None else prompts
-    model = args.model or os.environ.get("OPENAI_MODEL", "gpt-5.4")
+    model = args.model or os.environ.get("OPENAI_MODEL", "gpt-5.6-luna")
     effort = args.reasoning_effort or os.environ.get(
-        "OPENAI_REASONING_EFFORT", "none"
+        "OPENAI_REASONING_EFFORT", "medium"
     )
     output = args.output
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -210,7 +210,7 @@ def main() -> int:
         default=None,
         help="Optional cap; omit to let the API use its model/context limit",
     )
-    parser.add_argument("--timeout", type=float, default=120.0)
+    parser.add_argument("--timeout", type=float, default=600.0)
     args = parser.parse_args()
     if args.limit is not None and args.limit < 1:
         parser.error("--limit must be at least 1")
