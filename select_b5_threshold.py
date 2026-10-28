@@ -13,7 +13,13 @@ import argparse
 import json
 from pathlib import Path
 
-from cops_robbers import parse_response, score_one, summarise
+from cops_robbers import (
+    load_responses,
+    parse_confidence,
+    parse_response,
+    score_one,
+    summarise,
+)
 
 
 def load_jsonl(path: Path) -> list[dict]:
@@ -24,34 +30,25 @@ def load_jsonl(path: Path) -> list[dict]:
 def evaluate_threshold(
     instances: dict[str, dict], records: list[dict], threshold: float
 ) -> dict:
+    """Score the dev responses as if B5 had used this threshold, with the
+    runner's rules: an answer that is not valid in the required format is a
+    failure; a valid answer abstains if the model said UNDETERMINED or its
+    confidence is missing or below the threshold."""
     results = []
     for record in records:
         instance = instances[record["id"]]
         raw = record.get("response", "")
-        obj = parse_response(raw)
-        confidence = obj.get("confidence") if isinstance(obj, dict) else None
-        confidence = (
-            float(confidence)
-            if isinstance(confidence, (int, float)) and 0 <= confidence <= 1
-            else None
-        )
-        abstain = (
-            obj is None
-            or str(obj.get("status", "")).upper() == "UNDETERMINED"
-            or confidence is None
-            or confidence < threshold
-        )
-        if abstain:
-            results.append(
-                {"parsed": True, "abstained": True, "confidence": confidence}
-            )
+        result = score_one(instance, raw)
+        if not result["parsed"] or result.get("abstained"):
+            results.append(result)
+            continue
+        confidence = parse_confidence(parse_response(raw).get("confidence"))
+        if confidence is None or confidence < threshold:
+            results.append({"parsed": True, "abstained": True,
+                            "rooms": instance["n"], "confidence": confidence})
         else:
-            result = score_one(instance, raw)
-            if not result.get("parsed"):
-                results.append({"parsed": False})
-            else:
-                results.append(result)
-    return summarise(results)
+            results.append(result)
+    return summarise(results, allow_abstain=True)
 
 
 def main() -> int:
@@ -79,7 +76,11 @@ def main() -> int:
     instances = {row["id"]: row for row in load_jsonl(args.instances)}
     if not instances or any(row.get("split") != "dev" for row in instances.values()):
         parser.error("B5 threshold selection must use a development split file")
-    records = load_jsonl(args.responses)
+    latest, _ = load_responses(args.responses)
+    records = list(latest.values())
+    unknown = [r["id"] for r in records if r["id"] not in instances]
+    if unknown:
+        parser.error(f"response ids not in {args.instances}, e.g. {unknown[0]}")
     thresholds = [round(i / 100, 2) for i in range(101)]
     table = []
     for threshold in thresholds:
