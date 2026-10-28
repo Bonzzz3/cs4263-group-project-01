@@ -27,7 +27,10 @@ code itself uses the standard library only.
 | `dataset/` | Dataset | Instances, B0 prompts and composition statistics (see [Dataset](#dataset)) |
 | `tests/test_solver.py` | Solution A | Solver tests: hand-worked cases, a graph-theory theorem, the Petersen graph and an independent minimax search |
 | `bench_solver.py` | Solution A | Runtime and state counts against room count; writes `results/solver_benchmark.csv` |
-| `run_b0.py` | Solution B | Runs the B0 baseline prompts through an LLM API (see the script for usage) |
+| `run_b0.py` | Solution B | Runs the legacy B0 baseline through an LLM API |
+| `run_openai_b0.py` | Solution B | Runs B0 through the OpenAI Responses API |
+| `run_openai_safeguards.py` | Solution B | Runs B1--B5 safeguards through the OpenAI Responses API |
+| `solution_b_prompts.py` | Solution B | Builds safeguard prompts and combines model outputs |
 
 Each script's docstring has the details; this README covers how the pieces fit.
 
@@ -66,14 +69,16 @@ intruder strategy) or "intruder escapes". The B0 prompt states the same rules.
 ## Dataset
 
 One family, `coretree-2g`: a 10-room Petersen-type core with rooms attached one
-at a time up to 12, 14, ..., 30 rooms, room names shuffled, and 2 guards in
+at a time up to 12, 14, ..., 26 rooms, room names shuffled, and 2 guards in
 random start rooms. Every instance has both outcomes among its start rooms.
 Two other families were rejected: with 2 guards, random sparse graphs were won
 from every room (nothing to label), and on plain Petersen-type graphs every
 capture took one move (labels reduced to an adjacency check).
 
-- `dev`: 10 instances per size (100 in total), for prompt development.
-- `test`: 30 instances per size (300 in total), for reported results only.
+- `dev`: 10 instances per size (80 in total), for prompt development.
+- `test`: 30 instances per size (240 in total), for reported results only.
+- `instances_test_100.jsonl`: a balanced 100-instance held-out subset selected
+  from the current test split for the project's reduced evaluation budget.
 
 Each line of `dataset/instances_*.jsonl` is one instance:
 
@@ -81,6 +86,7 @@ Each line of `dataset/instances_*.jsonl` is one instance:
 | --- | --- |
 | `id`, `split`, `family` | Identity |
 | `n`, `k` | Number of rooms and guards (k = 2) |
+| `extra_edges` | Number of optional extra corridors; zero for the current coretree family |
 | `edges`, `corridors` | Corridors as pairs of room indices, and their count |
 | `guard_start` | Guards' start rooms (indices) |
 | `truth` | Room name → capture guaranteed |
