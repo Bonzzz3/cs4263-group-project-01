@@ -221,3 +221,6 @@ __marimo__/
 
 # macOS
 .DS_Store
+
+# Extra virtual environments (e.g. .venv-openai)
+.venv-*/
