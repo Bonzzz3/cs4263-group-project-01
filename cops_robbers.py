@@ -232,8 +232,18 @@ def parse_response(text):
 
 def score_one(inst, response_text):
     obj = parse_response(response_text)
+    if not obj:
+        return {"parsed": False}
+    confidence = obj.get("confidence")
+    confidence = float(confidence) if isinstance(confidence, (int, float)) and 0 <= confidence <= 1 else None
+    if str(obj.get("status", "")).upper() == "UNDETERMINED":
+        return {
+            "parsed": True,
+            "abstained": True,
+            "confidence": confidence,
+        }
     names = room_names(inst["n"])
-    if not obj or "capture_guaranteed" not in obj:
+    if "capture_guaranteed" not in obj:
         return {"parsed": False}
     pred = obj["capture_guaranteed"]
     if not all(r in pred and isinstance(pred[r], bool) for r in names):
@@ -242,15 +252,14 @@ def score_one(inst, response_text):
     false_win = sum(1 for r in names if pred[r] and not truth[r])    # unsafe
     false_loss = sum(1 for r in names if (not pred[r]) and truth[r])  # wasteful
     exact = false_win == 0 and false_loss == 0
-    conf = obj.get("confidence")
-    conf = float(conf) if isinstance(conf, (int, float)) and 0 <= conf <= 1 else None
     return {
         "parsed": True,
+        "abstained": False,
         "exact": exact,
         "false_win": false_win,
         "false_loss": false_loss,
         "rooms": len(names),
-        "confidence": conf,
+        "confidence": confidence,
     }
 
 
@@ -258,16 +267,20 @@ def summarise(results):
     total = len(results)
     parsed = [r for r in results if r["parsed"]]
     out = {"instances": total, "unparseable": total - len(parsed)}
-    if not parsed:
+    abstained = [r for r in parsed if r.get("abstained", False)]
+    answered = [r for r in parsed if not r.get("abstained", False)]
+    out["abstention_rate"] = len(abstained) / len(parsed) if parsed else None
+    out["coverage"] = len(answered) / len(parsed) if parsed else None
+    if not answered:
         return out
-    out["exact_match_rate"] = sum(r["exact"] for r in parsed) / len(parsed)
+    out["exact_match_rate"] = sum(r["exact"] for r in answered) / len(answered)
     out["instances_with_unsafe_claim"] = (
-        sum(1 for r in parsed if r["false_win"] > 0) / len(parsed))
+        sum(1 for r in answered if r["false_win"] > 0) / len(answered))
     out["unsafe_room_rate"] = (
-        sum(r["false_win"] for r in parsed) / sum(r["rooms"] for r in parsed))
+        sum(r["false_win"] for r in answered) / sum(r["rooms"] for r in answered))
     out["wasteful_room_rate"] = (
-        sum(r["false_loss"] for r in parsed) / sum(r["rooms"] for r in parsed))
-    with_conf = [r for r in parsed if r["confidence"] is not None]
+        sum(r["false_loss"] for r in answered) / sum(r["rooms"] for r in answered))
+    with_conf = [r for r in answered if r["confidence"] is not None]
     if with_conf:
         # Brier score of stated confidence against exact-match correctness
         out["brier"] = sum((r["confidence"] - (1.0 if r["exact"] else 0.0)) ** 2
