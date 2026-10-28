@@ -86,15 +86,15 @@ simple, because multiple rooms received the same label, or because no syntax
 error was encountered.
 
 If you can support every room label, return:
-{"status":"ANSWERED","capture_guaranteed":{"ROOM":true/false},"confidence":0.0}
+{"status": "ANSWERED", "capture_guaranteed": {ROOM_FIELDS}, "confidence": a number from 0 to 1}
 
 If an important ambiguity or unresolved escape route remains, abstain for the
 whole instance and return:
-{"status":"UNDETERMINED","confidence":0.0,"abstention_reason":"brief reason"}
+{"status": "UNDETERMINED", "confidence": a number from 0 to 1, "abstention_reason": "brief reason"}
 
-Replace ROOM and the confidence value with the required room labels and a
-number from 0 to 1.  Return only JSON.  A later wrapper may apply a threshold
-selected on development data, so do not treat abstention as failure.
+Give a label for every room listed.  Return only JSON.  A later wrapper may
+apply a threshold selected on development data, so do not treat abstention as
+failure.
 """
 
 
@@ -140,8 +140,11 @@ def build_b3_prompt(base_prompt: str) -> str:
 
 
 def build_b5_prompt(base_prompt: str) -> str:
-    head, _ = _split_output_contract(base_prompt)
-    return f"{head}\n\n{B5_INSTRUCTIONS.strip()}"
+    """B5 replaces the answer format with one that allows abstaining, keeping
+    the same per-room template as B0-B4 so the formats stay comparable."""
+    head, contract = _split_output_contract(base_prompt)
+    rooms = contract.split('"capture_guaranteed": {', 1)[1].split("}", 1)[0]
+    return f"{head}\n\n{B5_INSTRUCTIONS.strip().replace('ROOM_FIELDS', rooms)}"
 
 
 def _task_only(base_prompt: str) -> str:
@@ -300,13 +303,11 @@ def apply_abstention(
     candidate: dict[str, Any] | None,
     room_names: list[str],
     threshold: float,
-) -> dict[str, Any]:
+) -> dict[str, Any] | None:
     if candidate is None:
-        return {
-            "status": "UNDETERMINED",
-            "confidence": 0.0,
-            "abstention_reason": "response was not valid JSON in the required schema",
-        }
+        # Not valid JSON in the required schema. This is a failed answer, not
+        # an abstention, so it is scored like a failed answer in B0-B4.
+        return None
     if candidate.get("status") != "ANSWERED":
         return candidate
     confidence = candidate.get("confidence")
