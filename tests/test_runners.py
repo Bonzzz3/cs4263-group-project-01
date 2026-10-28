@@ -428,6 +428,18 @@ def test_b4_runs_draft_critique_revision(api):
     assert "CRITIQUE THE DRAFT" in prompts[1] and "CRITIQUE AND REVISION" in prompts[2]
 
 
+def test_safeguard_cut_off_before_the_answer_is_truncated_not_empty(api):
+    api.plan["CONFIDENCE AND ABSTENTION"] = ["cut"]
+    out = out_file()
+    p = run("run_openai_safeguards.py", api, "--variant", "B5", "--abstain-threshold",
+            "0.0", "--provider", "soclaas", "--model", "m", "--limit", "1",
+            "--output", out)
+    assert p.returncode == 0, p.stderr
+    r = records(out)[0]
+    assert r["status"] == "truncated" and r["truncated_calls"] == 1
+    assert r["response"] == "" and r["final_object"] is None
+
+
 def test_b5_threshold_is_part_of_the_run_settings(api):
     out = out_file()
     assert run("run_openai_safeguards.py", api, "--variant", "B5", "--abstain-threshold",

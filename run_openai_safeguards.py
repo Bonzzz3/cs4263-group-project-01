@@ -182,8 +182,15 @@ def run(args: argparse.Namespace) -> int:
             text, final = run_variant(args.variant, row["prompt"],
                                       room_names_from_prompt(row["prompt"]),
                                       ask, calls, args.abstain_threshold)
-            record.update({"response": text, "final_object": final,
-                           "status": "ok" if text else "empty_output"})
+            # No answer because a call was cut off (token limit, or SoCLaaS
+            # closing the stream at its time limit) is a truncation, as in B0.
+            if text:
+                status = "ok"
+            elif any(call.get("status") == "truncated" for call in calls):
+                status = "truncated"
+            else:
+                status = "empty_output"
+            record.update({"response": text, "final_object": final, "status": status})
         except CallFailed:
             failed = calls[-1]
             record.update({"response": "", "final_object": None, "status": "error",
