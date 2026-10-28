@@ -1,20 +1,23 @@
 #!/usr/bin/env python3
-"""Run Solution B1--B5 through the direct OpenAI Responses API.
+r"""Run Solution B1--B5 with OpenAI, SoCLaaS or OpenRouter (see llm_client.py).
 
 The runner is deliberately separate from the B0 runner.  It never loads or
 calls the classical solver, never reads truth labels, and never sends checker
 feedback to the model.  B3 voting and B4/B5 post-processing use only model
 outputs and the original task prompt.
 
-Examples:
-    .venv-openai/bin/python run_openai_safeguards.py \
-        --variant B1 --limit 2 --timeout 600 \
-        --output work/openai_b1_smoke.jsonl
+If any API call for an instance fails, the whole instance is recorded as an
+error and retried on the next run, so B3 never votes with a missing sample
+and B4 never critiques a draft that was not produced.
 
-    .venv-openai/bin/python run_openai_safeguards.py \
+Examples:
+    uv run --env-file .env python run_openai_safeguards.py \
+        --variant B1 --limit 2 --output work/openai_b1_smoke.jsonl
+
+    uv run --env-file .env python run_openai_safeguards.py \
         --variant B5 --abstain-threshold 0.70 --ids-from \
         dataset/instances_test_80.jsonl --prompts dataset/prompts_B0_test.jsonl \
-        --timeout 600 --output work/openai_b5_test80.jsonl
+        --output work/openai_b5_test80.jsonl
 """
 
 from __future__ import annotations
@@ -22,20 +25,21 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import time
-from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
-from openai import OpenAI
-
-from run_openai_b0 import (
-    read_ids,
-    read_prompts,
-    reasoning_tokens,
-    usage_value,
+from llm_client import (
+    add_run_arguments,
+    call_model,
+    check_run_arguments,
+    load_done,
+    make_client,
+    resolve_settings,
+    run_jobs,
+    utc_now,
 )
+from run_openai_b0 import select_prompts
 from solution_b_prompts import (
     apply_abstention,
     build_b1_prompt,
@@ -55,105 +59,19 @@ DEFAULT_OUTPUT = ROOT / "work" / "openai_safeguard_responses.jsonl"
 VARIANTS = ("B1", "B2", "B3", "B4", "B5")
 
 
-def utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def existing_ids(path: Path, model: str, effort: str, variant: str) -> set[str]:
-    if not path.exists():
-        return set()
-    done = set()
-    seen = set()
-    with path.open(encoding="utf-8") as handle:
-        for line_number, line in enumerate(handle, 1):
-            if not line.strip():
-                continue
-            row = json.loads(line)
-            if (
-                row.get("model") != model
-                or row.get("reasoning_effort") != effort
-                or row.get("variant") != variant
-            ):
-                raise ValueError(
-                    f"{path}:{line_number}: existing output uses different settings"
-                )
-            case_id = row.get("id")
-            if not isinstance(case_id, str) or case_id in seen:
-                raise ValueError(f"{path}:{line_number}: invalid or duplicate id")
-            seen.add(case_id)
-            if row.get("status") == "ok":
-                done.add(case_id)
-    return done
-
-
-def select_prompts(args: argparse.Namespace) -> list[dict[str, str]]:
-    prompts = read_prompts(args.prompts)
-    if args.ids_from is not None:
-        requested_ids = read_ids(args.ids_from)
-        prompt_ids = {row["id"] for row in prompts}
-        missing = requested_ids - prompt_ids
-        if missing:
-            sample = ", ".join(sorted(missing)[:3])
-            raise ValueError(
-                f"{args.ids_from} contains ids absent from {args.prompts}"
-                f" (for example: {sample})"
-            )
-        prompts = [row for row in prompts if row["id"] in requested_ids]
-    return prompts[: args.limit] if args.limit is not None else prompts
-
-
-def call_model(
-    client: OpenAI,
-    model: str,
-    effort: str,
-    prompt: str,
-    max_output_tokens: int | None,
-) -> dict[str, Any]:
-    started = time.perf_counter()
-    call = {"started_at": utc_now()}
-    try:
-        request: dict[str, Any] = {
-            "model": model,
-            "reasoning": {"effort": effort},
-            "store": False,
-            "input": prompt,
-        }
-        if max_output_tokens is not None:
-            request["max_output_tokens"] = max_output_tokens
-        response = client.responses.create(**request)
-        usage = response.usage
-        text = response.output_text or ""
-        call.update(
-            {
-                "response": text,
-                "response_id": response.id,
-                "input_tokens": usage_value(usage, "input_tokens"),
-                "output_tokens": usage_value(usage, "output_tokens"),
-                "reasoning_tokens": reasoning_tokens(usage),
-                "total_tokens": usage_value(usage, "total_tokens"),
-                "status": "ok" if text else "empty_output",
-            }
-        )
-    except Exception as exc:  # preserve diagnostic evidence in the JSONL
-        call.update(
-            {
-                "response": "",
-                "status": "error",
-                "error_type": type(exc).__name__,
-                "error": str(exc),
-            }
-        )
-    call["finished_at"] = utc_now()
-    call["latency_seconds"] = round(time.perf_counter() - started, 3)
-    return call
+class CallFailed(Exception):
+    """An API call for this instance failed; the instance is retried later."""
 
 
 def add_call_totals(record: dict[str, Any]) -> None:
     calls = record.get("calls", [])
-    for field in ("input_tokens", "output_tokens", "reasoning_tokens", "total_tokens"):
-        values = [call.get(field) for call in calls if isinstance(call.get(field), int)]
+    for field in ("input_tokens", "output_tokens", "reasoning_tokens", "total_tokens",
+                  "cost_usd"):
+        values = [call.get(field) for call in calls
+                  if isinstance(call.get(field), (int, float))]
         record[field] = sum(values) if values else None
     record["call_count"] = len(calls)
+    record["truncated_calls"] = sum(call.get("status") == "truncated" for call in calls)
     record["call_latencies_seconds"] = [
         call.get("latency_seconds") for call in calls
     ]
@@ -167,65 +85,54 @@ def run_variant(
     variant: str,
     base_prompt: str,
     room_names: list[str],
-    client: OpenAI,
-    model: str,
-    effort: str,
-    max_output_tokens: int | None,
+    ask: Callable[[str], dict[str, Any]],
+    calls: list[dict[str, Any]],
     abstain_threshold: float | None,
-) -> tuple[str, list[dict[str, Any]], dict[str, Any] | None]:
-    calls: list[dict[str, Any]] = []
-    final: dict[str, Any] | None = None
+) -> tuple[str, dict[str, Any] | None]:
+    """Run one safeguard on one instance. Each API call is appended to calls.
+    Raises CallFailed as soon as a call fails, so later calls never build on
+    a missing answer."""
 
+    def call(prompt: str) -> str:
+        result = ask(prompt)
+        calls.append(result)
+        if result["status"] == "error":
+            raise CallFailed(f"{result.get('error_type')}: {result.get('error')}")
+        return result["response"]
+
+    final: dict[str, Any] | None = None
     if variant == "B1":
-        calls.append(call_model(client, model, effort, build_b1_prompt(base_prompt), max_output_tokens))
+        text = call(build_b1_prompt(base_prompt))
     elif variant == "B2":
-        calls.append(call_model(client, model, effort, build_b2_prompt(base_prompt), max_output_tokens))
+        text = call(build_b2_prompt(base_prompt))
     elif variant == "B3":
         prompt = build_b3_prompt(base_prompt)
-        for _ in range(3):
-            calls.append(call_model(client, model, effort, prompt, max_output_tokens))
-        candidates = [
-            parse_candidate(call["response"], room_names)
-            if call.get("status") == "ok"
-            else None
-            for call in calls
-        ]
-        final = majority_vote(candidates, room_names)
+        samples = [call(prompt) for _ in range(3)]
+        # A tie or fewer than two valid samples gives UNDETERMINED, which the
+        # scorer counts as a wrong answer (only B5 may abstain).
+        final = majority_vote([parse_candidate(t, room_names) for t in samples], room_names)
+        text = samples[-1]
     elif variant == "B4":
-        draft_prompt = base_prompt
-        draft_call = call_model(client, model, effort, draft_prompt, max_output_tokens)
-        calls.append(draft_call)
-        draft = draft_call.get("response", "")
-        critic_prompt = build_b4_critic_prompt(base_prompt, draft)
-        critic_call = call_model(client, model, effort, critic_prompt, max_output_tokens)
-        calls.append(critic_call)
-        critique = critic_call.get("response", "")
-        revision_prompt = build_b4_revision_prompt(base_prompt, draft, critique)
-        revision_call = call_model(client, model, effort, revision_prompt, max_output_tokens)
-        calls.append(revision_call)
-        final_text = revision_call.get("response", "")
-        if parse_candidate(final_text, room_names) is not None:
-            final = parse_candidate(final_text, room_names)
-        elif parse_candidate(draft, room_names) is not None:
-            final = parse_candidate(draft, room_names)
+        draft = call(base_prompt)
+        critique = call(build_b4_critic_prompt(base_prompt, draft))
+        text = call(build_b4_revision_prompt(base_prompt, draft, critique))
+        final = parse_candidate(text, room_names) or parse_candidate(draft, room_names)
     elif variant == "B5":
-        calls.append(call_model(client, model, effort, build_b5_prompt(base_prompt), max_output_tokens))
         if abstain_threshold is None:
             raise ValueError("B5 requires --abstain-threshold selected on development data")
-        candidate = (
-            parse_candidate(calls[0]["response"], room_names)
-            if calls[0].get("status") == "ok"
-            else None
-        )
-        final = apply_abstention(candidate, room_names, abstain_threshold)
+        text = call(build_b5_prompt(base_prompt))
+        final = apply_abstention(parse_candidate(text, room_names), room_names,
+                                 abstain_threshold)
     else:
         raise ValueError(f"unknown safeguard variant: {variant}")
+    return (answer_json(final) if final is not None else text), final
 
-    if final is not None:
-        return answer_json(final), calls, final
-    if variant == "B4" and calls:
-        return calls[-1].get("response", ""), calls, None
-    return calls[0].get("response", "") if calls else "", calls, None
+
+def room_names_from_prompt(prompt: str) -> list[str]:
+    """Room names from the required JSON contract rather than the graph text.
+    This covers both A..Z and R0..R29 names."""
+    contract = prompt.split('"capture_guaranteed": {', 1)[1].split("}", 1)[0]
+    return [part.split(":", 1)[0].strip().strip('"') for part in contract.split(",")]
 
 
 def run(args: argparse.Namespace) -> int:
@@ -235,98 +142,74 @@ def run(args: argparse.Namespace) -> int:
         raise ValueError("--abstain-threshold must be between 0 and 1")
 
     prompts = select_prompts(args)
-    model = args.model or os.environ.get("OPENAI_MODEL", "gpt-5.6-luna")
-    effort = args.reasoning_effort or os.environ.get("OPENAI_REASONING_EFFORT", "medium")
+    model, effort = resolve_settings(args.provider, args.model, args.reasoning_effort)
+    settings = {
+        "provider": args.provider,
+        "model": model,
+        "reasoning_effort": effort,
+        "variant": args.variant,
+        "abstain_threshold": args.abstain_threshold,
+    }
     output = args.output
     output.parent.mkdir(parents=True, exist_ok=True)
-    done = existing_ids(output, model, effort, args.variant)
+    done = load_done(output, settings)
     pending = [row for row in prompts if row["id"] not in done]
 
-    print(f"variant={args.variant} model={model} reasoning_effort={effort}")
-    print(f"selected={len(prompts)} pending={len(pending)}")
+    print(f"variant={args.variant} provider={args.provider} model={model} "
+          f"reasoning_effort={effort}")
+    print(f"selected={len(prompts)} pending={len(pending)} workers={args.workers}")
     if not pending:
         return 0
 
-    client = OpenAI(max_retries=0, timeout=args.timeout)
-    with output.open("a", encoding="utf-8") as handle:
-        for row in pending:
-            started = time.perf_counter()
-            # Derive room names from the required JSON contract rather than
-            # from graph text.  This covers both A..Z and R0..R29 names.
-            contract = row["prompt"].split('"capture_guaranteed": {', 1)[1].split("}", 1)[0]
-            room_names = [part.split(":", 1)[0].strip().strip('"') for part in contract.split(",")]
-            record: dict[str, Any] = {
-                "id": row["id"],
-                "variant": args.variant,
-                "model": model,
-                "api": "responses",
-                "reasoning_effort": effort,
-                "abstain_threshold": args.abstain_threshold,
-                "prompt_sha256": hashlib.sha256(row["prompt"].encode("utf-8")).hexdigest(),
-                "started_at": utc_now(),
-            }
-            try:
-                response_text, calls, final = run_variant(
-                    args.variant,
-                    row["prompt"],
-                    room_names,
-                    client,
-                    model,
-                    effort,
-                    args.max_output_tokens,
-                    args.abstain_threshold,
-                )
-                record["calls"] = calls
-                record["response"] = response_text
-                record["final_object"] = final
-                record["status"] = "ok" if response_text else "empty_output"
-            except Exception as exc:
-                record.update(
-                    {
-                        "calls": record.get("calls", []),
-                        "response": "",
-                        "final_object": None,
-                        "status": "error",
-                        "error_type": type(exc).__name__,
-                        "error": str(exc),
-                    }
-                )
-            add_call_totals(record)
-            record["finished_at"] = utc_now()
-            record["latency_seconds"] = round(time.perf_counter() - started, 3)
-            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
-            handle.flush()
-            print(
-                f"{row['id']}: {record['status']} {record['latency_seconds']}s "
-                f"calls={record.get('call_count')} out={record.get('output_tokens')} "
-                f"reasoning={record.get('reasoning_tokens')}"
-            )
-            if record["status"] == "error":
-                return 1
-    return 0
+    client = make_client(args.provider, args.timeout, args.max_retries)
+
+    def ask(prompt: str) -> dict[str, Any]:
+        return call_model(client, args.provider, model, effort, prompt,
+                          args.max_output_tokens, args.stream)
+
+    def job(row: dict[str, str]) -> dict[str, Any]:
+        record: dict[str, Any] = {
+            "id": row["id"],
+            **settings,
+            "api": "responses" if args.provider == "openai" else "chat.completions",
+            "max_output_tokens": args.max_output_tokens,
+            "prompt_sha256": hashlib.sha256(row["prompt"].encode("utf-8")).hexdigest(),
+            "started_at": utc_now(),
+        }
+        calls: list[dict[str, Any]] = []
+        started = time.perf_counter()
+        try:
+            text, final = run_variant(args.variant, row["prompt"],
+                                      room_names_from_prompt(row["prompt"]),
+                                      ask, calls, args.abstain_threshold)
+            record.update({"response": text, "final_object": final,
+                           "status": "ok" if text else "empty_output"})
+        except CallFailed:
+            failed = calls[-1]
+            record.update({"response": "", "final_object": None, "status": "error",
+                           "error_type": failed.get("error_type"),
+                           "error": failed.get("error")})
+        record["calls"] = calls
+        add_call_totals(record)
+        record["finished_at"] = utc_now()
+        record["latency_seconds"] = round(time.perf_counter() - started, 3)
+        return record
+
+    return run_jobs(pending, job, output, args.workers)
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--variant", choices=VARIANTS, required=True)
     parser.add_argument("--prompts", type=Path, default=DEFAULT_PROMPTS)
     parser.add_argument("--ids-from", type=Path, default=None)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--limit", type=int, default=None)
-    parser.add_argument("--model", default=None)
-    parser.add_argument(
-        "--reasoning-effort",
-        choices=("none", "low", "medium", "high", "xhigh"),
-        default=None,
-    )
-    parser.add_argument("--max-output-tokens", type=int, default=None)
-    parser.add_argument("--timeout", type=float, default=600.0)
     parser.add_argument("--abstain-threshold", type=float, default=None)
+    add_run_arguments(parser)
     args = parser.parse_args()
-    if args.limit is not None and args.limit < 1:
-        parser.error("--limit must be at least 1")
-    if args.max_output_tokens is not None and args.max_output_tokens < 1:
-        parser.error("--max-output-tokens must be positive")
+    check_run_arguments(parser, args)
     try:
         return run(args)
     except ValueError as exc:

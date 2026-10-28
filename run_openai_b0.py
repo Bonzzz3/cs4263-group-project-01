@@ -1,14 +1,25 @@
 #!/usr/bin/env python3
-"""Run the Solution B0 baseline through the direct OpenAI Responses API.
+r"""Run the Solution B0 baseline: the plain prompt, one call per instance.
 
 B0 deliberately uses the existing plain prompts without tools, code,
 classical-solver access, structured-output enforcement, or post-processing.
 The scorer is run separately after responses have been saved.
 
-Example:
-    .venv-openai/bin/python run_openai_b0.py \
-        --limit 1 --max-output-tokens 512 \
+Works with OpenAI (Responses API), and SoCLaaS and OpenRouter
+(OpenAI-compatible Chat Completions); see llm_client.py. Rerunning the same
+command resumes: finished instances are skipped and failed API calls are
+retried.
+
+Examples:
+    uv run --env-file .env python run_openai_b0.py --limit 1 \
         --output work/openai_b0_smoke.jsonl
+
+    uv run --env-file .env python run_openai_b0.py --provider soclaas \
+        --model qwen3.6:35b --limit 1 --output work/soclaas_b0_smoke.jsonl
+
+    uv run --env-file .env python run_openai_b0.py --provider openrouter \
+        --model openai/gpt-5.4 --reasoning-effort low --limit 1 \
+        --output work/openrouter_b0_smoke.jsonl
 """
 
 from __future__ import annotations
@@ -16,21 +27,23 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
-import time
-from datetime import datetime, timezone
 from pathlib import Path
 
-from openai import OpenAI
+from llm_client import (
+    add_run_arguments,
+    call_model,
+    check_run_arguments,
+    load_done,
+    make_client,
+    resolve_settings,
+    run_jobs,
+    utc_now,
+)
 
 
 ROOT = Path(__file__).resolve().parent
 DEFAULT_PROMPTS = ROOT / "dataset" / "prompts_B0_dev.jsonl"
 DEFAULT_OUTPUT = ROOT / "work" / "openai_b0_responses.jsonl"
-
-
-def utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def read_prompts(path: Path) -> list[dict[str, str]]:
@@ -70,44 +83,11 @@ def read_ids(path: Path) -> set[str]:
     return ids
 
 
-def existing_ids(path: Path, model: str, effort: str) -> set[str]:
-    if not path.exists():
-        return set()
-    done = set()
-    seen = set()
-    with path.open(encoding="utf-8") as handle:
-        for line_number, line in enumerate(handle, 1):
-            if not line.strip():
-                continue
-            row = json.loads(line)
-            if row.get("model") != model or row.get("reasoning_effort") != effort:
-                raise ValueError(
-                    f"{path}:{line_number}: existing output uses different model/settings"
-                )
-            case_id = row.get("id")
-            if not isinstance(case_id, str) or case_id in seen:
-                raise ValueError(f"{path}:{line_number}: invalid or duplicate id")
-            seen.add(case_id)
-            if row.get("status") == "ok":
-                done.add(case_id)
-    return done
-
-
-def usage_value(usage, name: str):
-    return getattr(usage, name, None) if usage is not None else None
-
-
-def reasoning_tokens(usage):
-    details = getattr(usage, "output_tokens_details", None) if usage else None
-    return getattr(details, "reasoning_tokens", None) if details else None
-
-
-def run(args: argparse.Namespace) -> int:
+def select_prompts(args: argparse.Namespace) -> list[dict[str, str]]:
     prompts = read_prompts(args.prompts)
     if args.ids_from is not None:
         requested_ids = read_ids(args.ids_from)
-        prompt_ids = {row["id"] for row in prompts}
-        missing = requested_ids - prompt_ids
+        missing = requested_ids - {row["id"] for row in prompts}
         if missing:
             sample = ", ".join(sorted(missing)[:3])
             raise ValueError(
@@ -115,84 +95,44 @@ def run(args: argparse.Namespace) -> int:
                 f" (for example: {sample})"
             )
         prompts = [row for row in prompts if row["id"] in requested_ids]
-    selected = prompts[: args.limit] if args.limit is not None else prompts
-    model = args.model or os.environ.get("OPENAI_MODEL", "gpt-5.6-luna")
-    effort = args.reasoning_effort or os.environ.get(
-        "OPENAI_REASONING_EFFORT", "medium"
-    )
+    return prompts[: args.limit] if args.limit is not None else prompts
+
+
+def run(args: argparse.Namespace) -> int:
+    prompts = select_prompts(args)
+    model, effort = resolve_settings(args.provider, args.model, args.reasoning_effort)
+    settings = {"provider": args.provider, "model": model, "reasoning_effort": effort}
     output = args.output
     output.parent.mkdir(parents=True, exist_ok=True)
-    done = existing_ids(output, model, effort)
-    pending = [row for row in selected if row["id"] not in done]
+    done = load_done(output, settings)
+    pending = [row for row in prompts if row["id"] not in done]
 
-    print(f"model={model} reasoning_effort={effort}")
-    print(f"selected={len(selected)} pending={len(pending)}")
+    print(f"provider={args.provider} model={model} reasoning_effort={effort}")
+    print(f"selected={len(prompts)} pending={len(pending)} workers={args.workers}")
     if not pending:
         return 0
 
-    client = OpenAI(max_retries=0, timeout=args.timeout)
-    with output.open("a", encoding="utf-8") as handle:
-        for row in pending:
-            started = time.perf_counter()
-            record = {
-                "id": row["id"],
-                "model": model,
-                "api": "responses",
-                "reasoning_effort": effort,
-                "prompt_sha256": hashlib.sha256(
-                    row["prompt"].encode("utf-8")
-                ).hexdigest(),
-                "started_at": utc_now(),
-            }
-            try:
-                request = {
-                    "model": model,
-                    "reasoning": {"effort": effort},
-                    "store": False,
-                    "input": row["prompt"],
-                }
-                if args.max_output_tokens is not None:
-                    request["max_output_tokens"] = args.max_output_tokens
-                response = client.responses.create(**request)
-                usage = response.usage
-                text = response.output_text or ""
-                record.update(
-                    {
-                        "response": text,
-                        "response_id": response.id,
-                        "input_tokens": usage_value(usage, "input_tokens"),
-                        "output_tokens": usage_value(usage, "output_tokens"),
-                        "reasoning_tokens": reasoning_tokens(usage),
-                        "total_tokens": usage_value(usage, "total_tokens"),
-                        "status": "ok" if text else "empty_output",
-                    }
-                )
-            except Exception as exc:  # preserve failure evidence and stop safely
-                record.update(
-                    {
-                        "response": "",
-                        "status": "error",
-                        "error_type": type(exc).__name__,
-                        "error": str(exc),
-                    }
-                )
-            record["finished_at"] = utc_now()
-            record["latency_seconds"] = round(time.perf_counter() - started, 3)
-            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
-            handle.flush()
-            print(
-                f"{row['id']}: {record['status']} "
-                f"{record['latency_seconds']}s "
-                f"out={record.get('output_tokens')} "
-                f"reasoning={record.get('reasoning_tokens')}"
-            )
-            if record["status"] == "error":
-                return 1
-    return 0
+    client = make_client(args.provider, args.timeout, args.max_retries)
+
+    def job(row: dict[str, str]) -> dict:
+        record = {
+            "id": row["id"],
+            **settings,
+            "api": "responses" if args.provider == "openai" else "chat.completions",
+            "max_output_tokens": args.max_output_tokens,
+            "prompt_sha256": hashlib.sha256(row["prompt"].encode("utf-8")).hexdigest(),
+            "recorded_at": utc_now(),
+        }
+        record.update(call_model(client, args.provider, model, effort,
+                                 row["prompt"], args.max_output_tokens, args.stream))
+        return record
+
+    return run_jobs(pending, job, output, args.workers)
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--prompts", type=Path, default=DEFAULT_PROMPTS)
     parser.add_argument(
         "--ids-from",
@@ -202,21 +142,13 @@ def main() -> int:
     )
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--limit", type=int, default=None)
-    parser.add_argument("--model", default=None)
-    parser.add_argument("--reasoning-effort", choices=("none", "low", "medium", "high", "xhigh"), default=None)
-    parser.add_argument(
-        "--max-output-tokens",
-        type=int,
-        default=None,
-        help="Optional cap; omit to let the API use its model/context limit",
-    )
-    parser.add_argument("--timeout", type=float, default=600.0)
+    add_run_arguments(parser)
     args = parser.parse_args()
-    if args.limit is not None and args.limit < 1:
-        parser.error("--limit must be at least 1")
-    if args.max_output_tokens is not None and args.max_output_tokens < 1:
-        parser.error("--max-output-tokens must be positive")
-    return run(args)
+    check_run_arguments(parser, args)
+    try:
+        return run(args)
+    except ValueError as exc:
+        parser.error(str(exc))
 
 
 if __name__ == "__main__":
