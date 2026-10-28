@@ -66,14 +66,14 @@ intruder strategy) or "intruder escapes". The B0 prompt states the same rules.
 ## Dataset
 
 One family, `coretree-2g`: a 10-room Petersen-type core with rooms attached one
-at a time up to 12, 14, ..., 30 rooms, room names shuffled, and 2 guards in
+at a time up to 12, 14, ..., 26 rooms, room names shuffled, and 2 guards in
 random start rooms. Every instance has both outcomes among its start rooms.
 Two other families were rejected: with 2 guards, random sparse graphs were won
 from every room (nothing to label), and on plain Petersen-type graphs every
 capture took one move (labels reduced to an adjacency check).
 
-- `dev`: 10 instances per size (100 in total), for prompt development.
-- `test`: 30 instances per size (300 in total), for reported results only.
+- `dev`: 10 instances per size (80 in total), for prompt development.
+- `test`: 30 instances per size (240 in total), for reported results only.
 
 Each line of `dataset/instances_*.jsonl` is one instance:
 
