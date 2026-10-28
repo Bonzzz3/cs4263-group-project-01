@@ -28,7 +28,6 @@ dataset and scoring code use the standard library only.
 | `dataset/` | Dataset | Instances, B0 prompts and composition statistics (see [Dataset](#dataset)) |
 | `tests/test_solver.py` | Solution A | Solver tests: hand-worked cases, a graph-theory theorem, the Petersen graph and an independent minimax search |
 | `bench_solver.py` | Solution A | Runtime and state counts against room count; writes `results/solver_benchmark.csv` |
-| `run_b0.py` | Solution B | Runs the legacy B0 baseline through an LLM API |
 | `run_openai_b0.py` | Solution B | Runs B0 through OpenAI, SoCLaaS or OpenRouter |
 | `run_openai_safeguards.py` | Solution B | Runs B1--B5 safeguards through OpenAI, SoCLaaS or OpenRouter |
 | `solution_b_prompts.py` | Solution B | Builds safeguard prompts and combines model outputs |
