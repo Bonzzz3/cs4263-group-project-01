@@ -110,7 +110,9 @@ capture took one move (labels reduced to an adjacency check).
 - `dev`: 10 instances per size (80 in total), for prompt development.
 - `test`: 30 instances per size (240 in total), for reported results only.
 - `instances_test_80.jsonl`: a balanced 80-instance held-out subset selected
-  from the current test split for the project's reduced evaluation budget.
+  from the current test split for a reduced evaluation budget.
+- `instances_test_240.jsonl`: an explicit copy of the complete 240-instance
+  held-out test set, with 30 instances per room size.
 
 Each line of `dataset/instances_*.jsonl` is one instance:
 
