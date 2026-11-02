@@ -240,7 +240,9 @@ def parse_candidate(text: str, room_names: list[str]) -> dict[str, Any] | None:
         return None
     status = str(obj.get("status", "ANSWERED")).upper()
     confidence = obj.get("confidence")
-    if not isinstance(confidence, (int, float)) or not 0 <= confidence <= 1:
+    if (isinstance(confidence, bool)
+            or not isinstance(confidence, (int, float))
+            or not 0 <= confidence <= 1):
         confidence = None
     if status == "UNDETERMINED":
         return {

@@ -42,6 +42,13 @@ def test_b5_invalid_output_is_a_failure_not_an_abstention():
     assert apply_abstention(parse_candidate(json.dumps(low), ROOMS), ROOMS, 0.5)["status"] == "UNDETERMINED"
 
 
+def test_b5_boolean_confidence_does_not_bypass_threshold():
+    answer = {"capture_guaranteed": INST["truth"], "confidence": True}
+    candidate = parse_candidate(json.dumps(answer), ROOMS)
+    assert candidate["confidence"] is None
+    assert apply_abstention(candidate, ROOMS, 0.5)["status"] == "UNDETERMINED"
+
+
 def test_threshold_selection_counts_invalid_output_as_failure():
     records = [{"id": INST["id"], "response": "not json"}]
     s = evaluate_threshold({INST["id"]: INST}, records, 0.5)

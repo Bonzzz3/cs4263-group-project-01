@@ -99,23 +99,26 @@ instance, so their latency and token totals must be reported. If any call for
 an instance fails, the whole instance is retried, so B3 never votes with a
 missing sample.
 
-For B5, first run the raw B5 condition on the development set, inspect the
-threshold table, and freeze the selected threshold:
+For the reported B5 run, collect raw responses on the eight-instance
+development pilot, inspect the threshold table, and freeze the selected
+threshold before testing:
 
 ```bash
 uv run --env-file .env python run_openai_safeguards.py \
   --variant B5 --prompts dataset/prompts_B0_dev.jsonl \
+  --ids-from dataset/instances_dev_8.jsonl \
   --abstain-threshold 0.0 \
   --model gpt-5.6-luna --reasoning-effort medium \
-  --output work/openai_b5_dev.jsonl
+  --output work/luna_medium_B5_dev8_raw.jsonl
 
 uv run python select_b5_threshold.py \
-  --instances dataset/instances_dev.jsonl \
-  --responses work/openai_b5_dev.jsonl
+  --instances dataset/instances_dev_8.jsonl \
+  --responses work/luna_medium_B5_dev8_raw.jsonl
 ```
 
-Then rerun B5 with the selected threshold on the held-out set. Do not choose a
-threshold after looking at held-out labels.
+This pilot selected 0.75 by the script's fallback rule: no threshold met the
+development safety target at the required coverage. Then run B5 with 0.75 on
+the held-out set. Do not choose a threshold after looking at held-out labels.
 
 ## Evaluation
 
